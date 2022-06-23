@@ -82,6 +82,8 @@ type ManagedDiskOptions struct {
 	DiskAccessID *string
 	// BurstingEnabled - Set to true to enable bursting beyond the provisioned performance target of the disk.
 	BurstingEnabled *bool
+	// AllowUnalignedAttach - When enabled on a disk, it would skip fault domain alignment of the disk.
+	AllowUnalignedAttach *bool
 	// SubscriptionID - specify a different SubscriptionID
 	SubscriptionID string
 }
@@ -132,9 +134,10 @@ func (c *ManagedDiskController) CreateManagedDisk(ctx context.Context, options *
 		return "", err
 	}
 	diskProperties := compute.DiskProperties{
-		DiskSizeGB:      &diskSizeGB,
-		CreationData:    &creationData,
-		BurstingEnabled: options.BurstingEnabled,
+		DiskSizeGB:           &diskSizeGB,
+		CreationData:         &creationData,
+		BurstingEnabled:      options.BurstingEnabled,
+		AllowUnalignedAttach: options.AllowUnalignedAttach,
 	}
 
 	if options.NetworkAccessPolicy != "" {

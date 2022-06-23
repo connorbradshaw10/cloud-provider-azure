@@ -1,4 +1,4 @@
-# github.com/Azure/azure-sdk-for-go v64.1.0+incompatible
+# github.com/Azure/azure-sdk-for-go v64.1.0+incompatible => github.com/connorbradshaw10/azure-sdk-for-go v0.0.0-20220623222326-604230007bde
 ## explicit
 github.com/Azure/azure-sdk-for-go/services/authorization/mgmt/2015-07-01/authorization
 github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-07-01/compute
@@ -1190,3 +1190,4 @@ sigs.k8s.io/structured-merge-diff/v4/value
 # sigs.k8s.io/yaml v1.3.0
 ## explicit; go 1.12
 sigs.k8s.io/yaml
+# github.com/Azure/azure-sdk-for-go => github.com/connorbradshaw10/azure-sdk-for-go v0.0.0-20220623222326-604230007bde

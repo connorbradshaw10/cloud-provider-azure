@@ -5366,6 +5366,8 @@ type DiskProperties struct {
 	CompletionPercent *float64 `json:"completionPercent,omitempty"`
 	// PublicNetworkAccess - Possible values include: 'PublicNetworkAccessEnabled', 'PublicNetworkAccessDisabled'
 	PublicNetworkAccess PublicNetworkAccess `json:"publicNetworkAccess,omitempty"`
+	// AllowUnalignedAttach - When enabled on a disk, it would skip fault domain alignment of the disk.
+	AllowUnalignedAttach *bool `json:"optimizedForFrequentAttach,omitempty"`
 }
 
 // MarshalJSON is the custom marshaler for DiskProperties.
@@ -5436,6 +5438,9 @@ func (dp DiskProperties) MarshalJSON() ([]byte, error) {
 	}
 	if dp.PublicNetworkAccess != "" {
 		objectMap["publicNetworkAccess"] = dp.PublicNetworkAccess
+	}
+	if dp.AllowUnalignedAttach != nil {
+		objectMap["optimizedForFrequentAttach"] = dp.AllowUnalignedAttach
 	}
 	return json.Marshal(objectMap)
 }
@@ -6141,6 +6146,8 @@ type DiskUpdateProperties struct {
 	SupportsHibernation *bool `json:"supportsHibernation,omitempty"`
 	// PublicNetworkAccess - Possible values include: 'PublicNetworkAccessEnabled', 'PublicNetworkAccessDisabled'
 	PublicNetworkAccess PublicNetworkAccess `json:"publicNetworkAccess,omitempty"`
+	// AllowUnalignedAttach - When enabled on a disk, it would skip fault domain alignment of the disk.
+	AllowUnalignedAttach *bool `json:"optimizedForFrequentAttach,omitempty"`
 }
 
 // MarshalJSON is the custom marshaler for DiskUpdateProperties.
@@ -6196,6 +6203,9 @@ func (dup DiskUpdateProperties) MarshalJSON() ([]byte, error) {
 	}
 	if dup.PublicNetworkAccess != "" {
 		objectMap["publicNetworkAccess"] = dup.PublicNetworkAccess
+	}
+	if dup.AllowUnalignedAttach != nil {
+		objectMap["optimizedForFrequentAttach"] = dup.AllowUnalignedAttach
 	}
 	return json.Marshal(objectMap)
 }
