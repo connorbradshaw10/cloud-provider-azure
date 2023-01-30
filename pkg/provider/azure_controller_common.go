@@ -98,6 +98,7 @@ var (
 
 type controllerCommon struct {
 	diskStateMap        sync.Map // <diskURI, attaching/detaching state>
+	tempLunMap          sync.Map // <nodeName, array of temp luns>
 	lockMap             *lockMap
 	cloud               *Cloud
 	attachDiskProcessor *batch.Processor
@@ -105,6 +106,11 @@ type controllerCommon struct {
 
 	// DisableUpdateCache whether disable update cache in disk attach/detach
 	DisableUpdateCache bool
+}
+
+type TempLunMapping struct {
+	diskURI string
+	lun     int32
 }
 
 // AttachDiskOptions attach disk options
@@ -256,6 +262,11 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 		async:   async,
 	}
 
+	err := c.cloud.SetDiskLun(nodeName, diskToAttach)
+	if err != nil {
+		return -1, err
+	}
+
 	resourceGroup, err := c.cloud.GetNodeResourceGroup(string(nodeName))
 	if err != nil {
 		resourceGroup = c.cloud.ResourceGroup
@@ -313,11 +324,6 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 		async = async || disk.async
 	}
 
-	err := c.cloud.SetDiskLun(nodeName, diskMap)
-	if err != nil {
-		return nil, err
-	}
-
 	vmset, err := c.getNodeVMSet(nodeName, azcache.CacheReadTypeUnsafe)
 	if err != nil {
 		return nil, err
@@ -359,11 +365,13 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 			}
 		}
 
-		err = c.waitForUpdateResult(resultCtx, vmset, nodeName, future, err)
+		err := c.waitForUpdateResult(resultCtx, vmset, nodeName, future, err)
 
 		for i, disk := range disksToAttach {
 			lunChans[i] <- attachDiskResult{lun: diskMap[disk.diskURI].lun, err: err}
 		}
+
+		c.tempLunMap.Delete(string(nodeName))
 	}
 
 	if async {
@@ -529,71 +537,70 @@ func (c *controllerCommon) GetDiskLun(diskName, diskURI string, nodeName types.N
 	return -1, provisioningState, fmt.Errorf("%s for disk %s", consts.CannotFindDiskLUN, diskName)
 }
 
-// SetDiskLun find unused luns and allocate lun for every disk in disksPendingAttach map.
-// Return err if not enough luns are found.
-func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttach map[string]*AttachDiskOptions) error {
+// SetDiskLun finds an unused lun and allocates lun for disk pending attach.
+// Return err if not available lun cannot be found.
+func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, diskPendingAttach *AttachDiskParams) error {
+	uri := diskPendingAttach.diskURI
+	opt := diskPendingAttach.options
+	if opt == nil {
+		return fmt.Errorf("unexpected nil pointer in diskPendingAttach(%v)", diskPendingAttach)
+	}
+
+	klog.V(2).Infof("azureDisk - SetDiskLun: node(%s) disk(%s)", nodeName, diskPendingAttach)
+
+	c.lockMap.LockEntry(string(nodeName))
+	defer c.lockMap.UnlockEntry(string(nodeName))
 	disks, _, err := c.GetNodeDataDisks(nodeName, azcache.CacheReadTypeDefault)
 	if err != nil {
 		klog.Errorf("error of getting data disks for node %s: %v", nodeName, err)
 		return err
 	}
+	var tempLuns []TempLunMapping
+	if entry, ok := c.tempLunMap.Load(string(nodeName)); ok {
+		tempLuns = entry.([]TempLunMapping)
+	}
 
 	allLuns := make([]bool, maxLUN)
-	uriToLun := make(map[string]int32, len(disks))
 	for _, disk := range disks {
 		if disk.Lun != nil && *disk.Lun >= 0 && *disk.Lun < maxLUN {
 			allLuns[*disk.Lun] = true
-			if disk.ManagedDisk != nil {
-				uriToLun[*disk.ManagedDisk.ID] = *disk.Lun
+			if disk.ManagedDisk != nil && *disk.ManagedDisk.ID == uri {
+				opt.lun = *disk.Lun
+				return nil
 			}
 		}
 	}
-	if len(disksPendingAttach) == 0 {
-		// attach disk request is empty, return directly
-		return nil
+	for _, tempLun := range tempLuns {
+		if tempLun.lun >= 0 && tempLun.lun < maxLUN {
+			allLuns[tempLun.lun] = true
+			if tempLun.diskURI == uri {
+				opt.lun = tempLun.lun
+				return nil
+			}
+		}
 	}
 
-	// allocate lun for every disk in disksPendingAttach
-	var availableDiskLuns []int32
-	freeLunsCount := 0
+	klog.V(2).Infof("azureDisk - SetDiskLun: tempLuns(%s)", tempLuns)
+	klog.V(2).Infof("azureDisk - SetDiskLun: takenluns(%s)", allLuns)
+
+	// allocate lun
 	for lun, inUse := range allLuns {
 		if !inUse {
-			availableDiskLuns = append(availableDiskLuns, int32(lun))
-			freeLunsCount++
-			// found enough luns for to assign to all pending disks
-			if freeLunsCount >= len(disksPendingAttach) {
-				break
+			opt.lun = int32(lun)
+			if opt.lunCh != nil {
+				opt.lunCh <- opt.lun
 			}
+			newTempLun := new(TempLunMapping)
+			newTempLun.lun = int32(lun)
+			newTempLun.diskURI = uri
+			tempLuns = append(tempLuns, *newTempLun)
+			c.tempLunMap.Store(string(nodeName), tempLuns)
+			klog.V(2).Infof("azureDisk - SetDiskLun: allocated lun: node(%s) disk(%s)", nodeName, opt)
+			return nil
 		}
 	}
 
-	if len(availableDiskLuns) < len(disksPendingAttach) {
-		return fmt.Errorf("could not find enough disk luns(current: %d) for disksPendingAttach(%v, len=%d)",
-			len(availableDiskLuns), disksPendingAttach, len(disksPendingAttach))
-	}
-
-	count := 0
-	for uri, opt := range disksPendingAttach {
-		if opt == nil {
-			return fmt.Errorf("unexpected nil pointer in disksPendingAttach(%v)", disksPendingAttach)
-		}
-		// disk already exists and has assigned lun
-		lun, exists := uriToLun[uri]
-		if exists {
-			opt.lun = lun
-		}
-		opt.lun = availableDiskLuns[count]
-		if opt.lunCh != nil {
-			// if lun channel is provided, feed the channel the determined lun value
-			opt.lunCh <- opt.lun
-		}
-		count++
-	}
-
-	if count <= 0 {
-		return fmt.Errorf("could not find lun of, disksPendingAttach(%v)", disksPendingAttach)
-	}
-	return nil
+	return fmt.Errorf("could not find lun for disksPendingAttach(%v)", diskPendingAttach)
 }
 
 // DisksAreAttached checks if a list of volumes are attached to the node with the specified NodeName.
